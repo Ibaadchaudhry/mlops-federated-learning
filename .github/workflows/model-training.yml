@@ -1,17 +1,12 @@
 name: Model Training Automation
 
 on:
-  # Trigger on data changes
+  # Trigger on data or model changes
   push:
     paths:
       - 'data_ingestion.py'
       - 'save_clients.py'
       - 'requirements.txt'
-    branches: [ main ]
-  
-  # Trigger on model changes
-  push:
-    paths:
       - 'model.py'
       - 'fl_server.py'
       - 'fl_client.py'
@@ -395,7 +390,7 @@ jobs:
           "
 
       - name: Archive training artifacts
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: trained-models-${{ github.run_number }}
           path: |
@@ -440,7 +435,7 @@ jobs:
           echo "- Consider deployment to staging" >> training-summary.md
 
       - name: Upload training summary
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: training-summary
           path: training-summary.md
