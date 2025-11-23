@@ -31,13 +31,13 @@ This evaluation report provides a comprehensive analysis of the federated learni
 - **Best Performance**: Round 7 achieved peak accuracy of 79.23%
 - **Stability**: AUC-ROC remained consistently above 89% after Round 5
 
-![Federated Performance Progression](../evaluation_images/federated_performance_progression.png)
+![Federated Performance Progression](evaluation_images/federated_performance_progression.png)
 
 ### 1.2 Client-Level Performance Analysis
 
-![Client Performance Comparison](../evaluation_images/client_performance_comparison.png)
+![Client Performance Comparison](evaluation_images/client_performance_comparison.png)
 
-![Client Accuracy Distribution](../evaluation_images/client_accuracy_distribution.png)
+![Client Accuracy Distribution](evaluation_images/client_accuracy_distribution.png)
 
 #### Per-Client Accuracy Distribution
 
@@ -70,11 +70,11 @@ This evaluation report provides a comprehensive analysis of the federated learni
 
 *Simulated centralized performance based on combined dataset
 
-![Performance Comparison](../evaluation_images/performance_comparison.png)
+![Performance Comparison](evaluation_images/performance_comparison.png)
 
 ### 2.2 Privacy-Performance Trade-off Analysis
 
-![Privacy Performance Tradeoff](../evaluation_images/privacy_performance_tradeoff.png)
+![Privacy Performance Tradeoff](evaluation_images/privacy_performance_tradeoff.png)
 
 **Key Trade-offs Identified**:
 
@@ -89,7 +89,7 @@ This evaluation report provides a comprehensive analysis of the federated learni
 
 ### 3.1 Classification Error Breakdown
 
-![Confusion Matrix Analysis](../evaluation_images/confusion_matrix_rounds.png)
+![Confusion Matrix Analysis](evaluation_images/confusion_matrix_rounds.png)
 
 #### Confusion Matrix Analysis - Final Model (Round 10)
 
@@ -107,7 +107,7 @@ F1-Score (>50K): 74.5%
 
 ### 3.2 Feature-Level Error Analysis
 
-![Model Architecture Analysis](../evaluation_images/architecture_comparison.png)
+![Model Architecture Analysis](evaluation_images/architecture_comparison.png)
 
 #### Most Problematic Features (High Error Contribution):
 
@@ -138,7 +138,7 @@ F1-Score (>50K): 74.5%
 
 **Architecture**: TabularMLP (Input → 128 → 64 → 1)
 
-![Model Architecture Performance](../evaluation_images/architecture_comparison.png)
+![Model Architecture Performance](evaluation_images/architecture_comparison.png)
 
 #### Layer-wise Analysis:
 
@@ -150,7 +150,7 @@ F1-Score (>50K): 74.5%
 
 ### 4.2 Alternative Architecture Comparison
 
-![Architecture Comparison](../evaluation_images/architecture_comparison.png)
+![Architecture Comparison](evaluation_images/architecture_comparison.png)
 
 | Architecture | Accuracy | Training Time | Memory | Federated Efficiency |
 |-------------|----------|---------------|---------|---------------------|
@@ -180,9 +180,9 @@ F1-Score (>50K): 74.5%
 
 ### 5.2 Drift Detection ROC Analysis
 
-![Federated Learning Performance](../evaluation_images/performance_comparison.png)
+![Federated Learning Performance](evaluation_images/performance_comparison.png)
 
-![Performance Progression](../evaluation_images/federated_performance_progression.png)
+![Performance Progression](evaluation_images/federated_performance_progression.png)
 
 **Performance Metrics**:
 - **True Positive Rate**: 87.3% (correctly identified drift)
@@ -197,7 +197,7 @@ F1-Score (>50K): 74.5%
 
 ### 6.1 Computational Efficiency
 
-![Resource Utilization](../evaluation_images/resource_utilization.png)
+![Resource Utilization](evaluation_images/resource_utilization.png)
 
 #### Resource Consumption by Component
 
@@ -212,7 +212,7 @@ F1-Score (>50K): 74.5%
 
 ### 6.2 Scalability Analysis
 
-![Scalability Analysis](../evaluation_images/scalability_analysis.png)
+![Scalability Analysis](evaluation_images/scalability_analysis.png)
 
 | Clients | Training Time | Memory/Client | Network Overhead | Accuracy |
 |---------|---------------|---------------|------------------|----------|
@@ -229,7 +229,7 @@ F1-Score (>50K): 74.5%
 
 ### 7.1 MLOps Pipeline Performance
 
-![MLOps Pipeline Performance](../evaluation_images/resource_utilization.png)
+![MLOps Pipeline Performance](evaluation_images/resource_utilization.png)
 
 #### CI/CD Pipeline Metrics
 
@@ -243,7 +243,7 @@ F1-Score (>50K): 74.5%
 
 ### 7.2 System Reliability Metrics
 
-![System Performance Metrics](../evaluation_images/performance_comparison.png)
+![System Performance Metrics](evaluation_images/performance_comparison.png)
 
 | Metric | Target | Achieved | Status |
 |--------|--------|----------|--------|
@@ -275,7 +275,7 @@ F1-Score (>50K): 74.5%
 
 ### 8.2 Future Enhancements
 
-![Improvement Roadmap](../evaluation_images/improvement_roadmap.png)
+![Improvement Roadmap](evaluation_images/improvement_roadmap.png)
 
 #### Short-term (1-3 months):
 - Implement adaptive aggregation strategies
