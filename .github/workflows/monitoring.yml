@@ -1,0 +1,499 @@
+name: Performance Monitoring & Alerts
+
+on:
+  # Scheduled monitoring checks
+  schedule:
+    - cron: '0 */6 * * *'  # Every 6 hours
+  
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      check_type:
+        description: 'Type of monitoring check'
+        required: true
+        default: 'full'
+        type: choice
+        options:
+          - full
+          - performance
+          - drift
+          - health
+      alert_threshold:
+        description: 'Performance alert threshold (accuracy %)'
+        required: false
+        default: '70'
+        type: string
+
+  # Trigger after deployments
+  workflow_run:
+    workflows: ["MLOps Federated Learning CI/CD"]
+    types: [completed]
+
+env:
+  PYTHON_VERSION: '3.10'
+  PERFORMANCE_THRESHOLD: 0.70
+  DRIFT_THRESHOLD: 0.20
+
+jobs:
+  # Health check for deployed services
+  health-monitoring:
+    name: Service Health Monitoring
+    runs-on: ubuntu-latest
+    if: github.event.inputs.check_type == 'health' || github.event.inputs.check_type == 'full' || github.event_name == 'schedule'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Check service health
+        run: |
+          echo "Checking service health..."
+          
+          # Check if services are running (assuming they're deployed)
+          services=("http://localhost:8000/health" "http://localhost:8501/_stcore/health")
+          
+          for service in "${services[@]}"; do
+            echo "Checking $service..."
+            if curl -f -s --connect-timeout 10 "$service" > /dev/null 2>&1; then
+              echo "$service is healthy"
+            else
+              echo "$service is not responding"
+              # In production, you would send alerts here
+            fi
+          done
+          
+          echo "Health check completed"
+
+  # Performance monitoring
+  performance-monitoring:
+    name: Model Performance Monitoring
+    runs-on: ubuntu-latest
+    if: github.event.inputs.check_type == 'performance' || github.event.inputs.check_type == 'full' || github.event_name == 'schedule'
+    outputs:
+      performance-alert: ${{ steps.performance-check.outputs.alert }}
+      current-accuracy: ${{ steps.performance-check.outputs.accuracy }}
+      current-auc: ${{ steps.performance-check.outputs.auc }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Analyze model performance
+        id: performance-check
+        run: |
+          python -c "
+          import os
+          import json
+          import numpy as np
+          import pandas as pd
+          from datetime import datetime, timedelta
+          
+          alert_needed = False
+          current_accuracy = 0.0
+          current_auc = 0.0
+          threshold = float('${{ github.event.inputs.alert_threshold || env.PERFORMANCE_THRESHOLD }}') / 100
+          
+          print(f'Performance monitoring with threshold: {threshold:.2%}')
+          
+          # Check if metrics history exists
+          if os.path.exists('models/metrics_history.json'):
+              with open('models/metrics_history.json', 'r') as f:
+                  metrics_history = json.load(f)
+              
+              if metrics_history:
+                  # Analyze recent performance
+                  recent_metrics = metrics_history[-5:]  # Last 5 rounds
+                  
+                  current_metrics = metrics_history[-1]['metrics']
+                  current_accuracy = current_metrics.get('accuracy', 0)
+                  current_auc = current_metrics.get('auc', 0)
+                  
+                  print(f'Current Performance:')
+                  print(f'   Accuracy: {current_accuracy:.4f}')
+                  print(f'   AUC: {current_auc:.4f}')
+                  
+                  # Check for performance degradation
+                  if current_accuracy < threshold:
+                      print(f'ALERT: Accuracy ({current_accuracy:.4f}) below threshold ({threshold:.4f})')
+                      alert_needed = True
+                  
+                  # Check for performance trend
+                  if len(recent_metrics) >= 3:
+                      accuracies = [m['metrics'].get('accuracy', 0) for m in recent_metrics]
+                      trend = np.polyfit(range(len(accuracies)), accuracies, 1)[0]
+                      
+                      if trend < -0.01:  # Declining trend
+                          print(f'Warning: Declining performance trend detected ({trend:.4f}/round)')
+                          alert_needed = True
+                      
+                      print(f'Performance trend: {trend:.4f} accuracy/round')
+                  
+                  # Performance stability check
+                  if len(recent_metrics) >= 5:
+                      accuracies = [m['metrics'].get('accuracy', 0) for m in recent_metrics]
+                      std_dev = np.std(accuracies)
+                      
+                      if std_dev > 0.05:  # High variance
+                          print(f'Warning: High performance variance detected (std: {std_dev:.4f})')
+                          alert_needed = True
+              else:
+                  print('No metrics found in history')
+                  alert_needed = True
+          else:
+              print('No metrics history file found')
+              alert_needed = True
+          
+          print(f'Performance alert needed: {alert_needed}')
+          
+          # Set outputs
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'alert={str(alert_needed).lower()}\\n')
+              f.write(f'accuracy={current_accuracy:.4f}\\n')
+              f.write(f'auc={current_auc:.4f}\\n')
+          "
+
+      - name: Generate performance report
+        run: |
+          echo "# Model Performance Report" > performance-report.md
+          echo "" >> performance-report.md
+          echo "**Generated:** $(date -u)" >> performance-report.md
+          echo "**Threshold:** ${{ github.event.inputs.alert_threshold || env.PERFORMANCE_THRESHOLD }}%" >> performance-report.md
+          echo "" >> performance-report.md
+          
+          if [ -f "models/metrics_history.json" ]; then
+            python -c "
+            import json
+            import matplotlib.pyplot as plt
+            import pandas as pd
+            
+            with open('models/metrics_history.json', 'r') as f:
+                history = json.load(f)
+            
+            if history:
+                df = pd.DataFrame([
+                    {
+                        'round': h['round'],
+                        'accuracy': h['metrics'].get('accuracy', 0),
+                        'auc': h['metrics'].get('auc', 0),
+                        'loss': h['metrics'].get('loss', 0)
+                    }
+                    for h in history
+                ])
+                
+                # Create performance summary
+                latest = df.iloc[-1]
+                print(f'## Current Performance')
+                print(f'- **Accuracy:** {latest[\"accuracy\"]:.4f}')
+                print(f'- **AUC:** {latest[\"auc\"]:.4f}')
+                print(f'- **Loss:** {latest[\"loss\"]:.4f}')
+                print(f'- **Round:** {int(latest[\"round\"])}')
+                print()
+                
+                # Performance trends
+                if len(df) >= 5:
+                    recent = df.tail(5)
+                    acc_change = recent['accuracy'].iloc[-1] - recent['accuracy'].iloc[0]
+                    auc_change = recent['auc'].iloc[-1] - recent['auc'].iloc[0]
+                    
+                    print(f'## Recent Trends (Last 5 Rounds)')
+                    print(f'- **Accuracy Change:** {acc_change:+.4f}')
+                    print(f'- **AUC Change:** {auc_change:+.4f}')
+                    print()
+                
+                # Performance statistics
+                print(f'## Overall Statistics')
+                print(f'- **Best Accuracy:** {df[\"accuracy\"].max():.4f} (Round {df.loc[df[\"accuracy\"].idxmax(), \"round\"]:.0f})')
+                print(f'- **Best AUC:** {df[\"auc\"].max():.4f} (Round {df.loc[df[\"auc\"].idxmax(), \"round\"]:.0f})')
+                print(f'- **Average Accuracy:** {df[\"accuracy\"].mean():.4f}')
+                print(f'- **Average AUC:** {df[\"auc\"].mean():.4f}')
+            " >> performance-report.md
+          fi
+
+      - name: Upload performance report
+        uses: actions/upload-artifact@v3
+        with:
+          name: performance-report
+          path: performance-report.md
+
+  # Drift monitoring
+  drift-monitoring:
+    name: Data Drift Monitoring
+    runs-on: ubuntu-latest
+    if: github.event.inputs.check_type == 'drift' || github.event.inputs.check_type == 'full' || github.event_name == 'schedule'
+    outputs:
+      drift-alert: ${{ steps.drift-check.outputs.alert }}
+      drift-ratio: ${{ steps.drift-check.outputs.drift-ratio }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Analyze data drift
+        id: drift-check
+        run: |
+          python -c "
+          import os
+          import glob
+          import pandas as pd
+          import numpy as np
+          from datetime import datetime
+          
+          alert_needed = False
+          drift_ratio = 0.0
+          threshold = float('${{ env.DRIFT_THRESHOLD }}')
+          
+          print(f'Data drift monitoring with threshold: {threshold:.2%}')
+          
+          # Find latest drift reports
+          drift_files = glob.glob('drift_reports/drift_round_*_client_*.csv')
+          
+          if drift_files:
+              # Get the most recent round
+              rounds = [int(f.split('round_')[1].split('_')[0]) for f in drift_files]
+              latest_round = max(rounds)
+              
+              latest_files = [f for f in drift_files if f'round_{latest_round}_' in f]
+              
+              print(f'Analyzing {len(latest_files)} drift reports from round {latest_round}')
+              
+              total_features = 0
+              total_drift_features = 0
+              
+              for drift_file in latest_files:
+                  try:
+                      df = pd.read_csv(drift_file, index_col=0)
+                      
+                      if 'drift_flag' in df.columns:
+                          client_id = drift_file.split('client_')[1].split('.')[0]
+                          drift_features = df['drift_flag'].sum()
+                          total_features += len(df)
+                          total_drift_features += drift_features
+                          
+                          client_drift_ratio = drift_features / len(df)
+                          print(f'   Client {client_id}: {drift_features}/{len(df)} features ({client_drift_ratio:.2%})')
+                  
+                  except Exception as e:
+                      print(f'Error reading {drift_file}: {e}')
+              
+              if total_features > 0:
+                  drift_ratio = total_drift_features / total_features
+                  print(f'Overall drift ratio: {drift_ratio:.2%}')
+                  
+                  if drift_ratio > threshold:
+                      print(f'ALERT: Drift ratio ({drift_ratio:.2%}) exceeds threshold ({threshold:.2%})')
+                      alert_needed = True
+                  else:
+                      print(f'Drift ratio within acceptable range')
+              else:
+                  print(' No drift data found')
+          else:
+              print('No drift reports found')
+              alert_needed = True
+          
+          print(f'Drift alert needed: {alert_needed}')
+          
+          # Set outputs
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'alert={str(alert_needed).lower()}\\n')
+              f.write(f'drift-ratio={drift_ratio:.4f}\\n')
+          "
+
+      - name: Generate drift report
+        run: |
+          echo "# Data Drift Analysis Report" > drift-report.md
+          echo "" >> drift-report.md
+          echo "**Generated:** $(date -u)" >> drift-report.md
+          echo "**Drift Threshold:** ${{ env.DRIFT_THRESHOLD }}" >> drift-report.md
+          echo "**Current Drift Ratio:** ${{ steps.drift-check.outputs.drift-ratio }}" >> drift-report.md
+          echo "" >> drift-report.md
+          
+          # Add detailed drift analysis
+          python -c "
+          import glob
+          import pandas as pd
+          import json
+          
+          drift_files = glob.glob('drift_reports/drift_round_*_client_*.csv')
+          
+          if drift_files:
+              rounds = [int(f.split('round_')[1].split('_')[0]) for f in drift_files]
+              latest_round = max(rounds)
+              latest_files = [f for f in drift_files if f'round_{latest_round}_' in f]
+              
+              print(f'## Round {latest_round} Drift Analysis')
+              print()
+              
+              for drift_file in latest_files:
+                  try:
+                      df = pd.read_csv(drift_file, index_col=0)
+                      client_id = drift_file.split('client_')[1].split('.')[0]
+                      
+                      if 'drift_flag' in df.columns:
+                          drift_features = df[df['drift_flag'] == True]
+                          
+                          print(f'### Client {client_id}')
+                          print(f'- **Total Features:** {len(df)}')
+                          print(f'- **Drifted Features:** {len(drift_features)}')
+                          print(f'- **Drift Ratio:** {len(drift_features)/len(df):.2%}')
+                          
+                          if len(drift_features) > 0:
+                              print(f'- **Top Drifted Features:**')
+                              for feature in drift_features.head(5).index:
+                                  psi_val = drift_features.loc[feature, 'psi']
+                                  print(f'  - {feature}: PSI = {psi_val:.4f}')
+                          print()
+                  
+                  except Exception as e:
+                      print(f'Error processing {drift_file}: {e}')
+          " >> drift-report.md
+
+      - name: Upload drift report
+        uses: actions/upload-artifact@v3
+        with:
+          name: drift-report
+          path: drift-report.md
+
+  # Alert management
+  alert-management:
+    name: Alert Management
+    runs-on: ubuntu-latest
+    needs: [performance-monitoring, drift-monitoring]
+    if: always() && (needs.performance-monitoring.outputs.performance-alert == 'true' || needs.drift-monitoring.outputs.drift-alert == 'true')
+    
+    steps:
+      - name: Performance alert
+        if: needs.performance-monitoring.outputs.performance-alert == 'true'
+        run: |
+          echo "PERFORMANCE ALERT"
+          echo "===================="
+          echo "Current accuracy: ${{ needs.performance-monitoring.outputs.current-accuracy }}"
+          echo "Current AUC: ${{ needs.performance-monitoring.outputs.current-auc }}"
+          echo ""
+          echo "Recommended actions:"
+          echo "1. Review recent model training"
+          echo "2. Check for data quality issues"
+          echo "3. Consider retraining with more data"
+          echo "4. Investigate feature drift"
+
+      - name: Drift alert
+        if: needs.drift-monitoring.outputs.drift-alert == 'true'
+        run: |
+          echo "DATA DRIFT ALERT"
+          echo "==================="
+          echo "Current drift ratio: ${{ needs.drift-monitoring.outputs.drift-ratio }}"
+          echo "Threshold: ${{ env.DRIFT_THRESHOLD }}"
+          echo ""
+          echo "Recommended actions:"
+          echo "1. Investigate data sources"
+          echo "2. Review feature engineering"
+          echo "3. Consider model retraining"
+          echo "4. Update data validation rules"
+
+      - name: Trigger retraining (if high drift)
+        if: needs.drift-monitoring.outputs.drift-alert == 'true'
+        run: |
+          drift_ratio=${{ needs.drift-monitoring.outputs.drift-ratio }}
+          high_threshold=0.3
+          
+          if (( $(echo "$drift_ratio > $high_threshold" | bc -l) )); then
+            echo "High drift detected ($drift_ratio > $high_threshold)"
+            echo "Triggering automatic retraining..."
+            
+            # Trigger retraining workflow
+            curl -X POST \
+              -H "Authorization: token ${{ secrets.GH_PAT }}" \
+              -H "Accept: application/vnd.github.v3+json" \
+              "https://api.github.com/repos/${{ github.repository }}/actions/workflows/model-training.yml/dispatches" \
+              -d '{"ref":"main","inputs":{"training_rounds":"15","force_data_refresh":"true"}}'
+          else
+            echo "Drift level manageable, monitoring continues"
+          fi
+
+  # Monitoring summary
+  monitoring-summary:
+    name: Monitoring Summary
+    runs-on: ubuntu-latest
+    needs: [health-monitoring, performance-monitoring, drift-monitoring, alert-management]
+    if: always()
+    
+    steps:
+      - name: Create monitoring summary
+        run: |
+          echo "# MLOps Monitoring Summary" > monitoring-summary.md
+          echo "" >> monitoring-summary.md
+          echo "**Monitoring Run:** ${{ github.run_number }}" >> monitoring-summary.md
+          echo "**Timestamp:** $(date -u)" >> monitoring-summary.md
+          echo "**Trigger:** ${{ github.event_name }}" >> monitoring-summary.md
+          echo "" >> monitoring-summary.md
+          
+          # Health status
+          echo "## Service Health" >> monitoring-summary.md
+          if [ "${{ needs.health-monitoring.result }}" == "success" ]; then
+            echo "Services are healthy" >> monitoring-summary.md
+          else
+            echo "Service health issues detected" >> monitoring-summary.md
+          fi
+          echo "" >> monitoring-summary.md
+          
+          # Performance status
+          echo "## Model Performance" >> monitoring-summary.md
+          if [ "${{ needs.performance-monitoring.outputs.performance-alert }}" == "true" ]; then
+            echo "Performance alert triggered" >> monitoring-summary.md
+            echo "- Current accuracy: ${{ needs.performance-monitoring.outputs.current-accuracy }}" >> monitoring-summary.md
+            echo "- Current AUC: ${{ needs.performance-monitoring.outputs.current-auc }}" >> monitoring-summary.md
+          else
+            echo "Performance within acceptable range" >> monitoring-summary.md
+            echo "- Current accuracy: ${{ needs.performance-monitoring.outputs.current-accuracy }}" >> monitoring-summary.md
+            echo "- Current AUC: ${{ needs.performance-monitoring.outputs.current-auc }}" >> monitoring-summary.md
+          fi
+          echo "" >> monitoring-summary.md
+          
+          # Drift status
+          echo "## Data Drift" >> monitoring-summary.md
+          if [ "${{ needs.drift-monitoring.outputs.drift-alert }}" == "true" ]; then
+            echo "Drift alert triggered" >> monitoring-summary.md
+            echo "- Current drift ratio: ${{ needs.drift-monitoring.outputs.drift-ratio }}" >> monitoring-summary.md
+          else
+            echo "Data drift within acceptable range" >> monitoring-summary.md
+            echo "- Current drift ratio: ${{ needs.drift-monitoring.outputs.drift-ratio }}" >> monitoring-summary.md
+          fi
+          echo "" >> monitoring-summary.md
+          
+          # Recommendations
+          echo "## Recommendations" >> monitoring-summary.md
+          if [ "${{ needs.performance-monitoring.outputs.performance-alert }}" == "true" ] || [ "${{ needs.drift-monitoring.outputs.drift-alert }}" == "true" ]; then
+            echo "- Review model performance and data quality" >> monitoring-summary.md
+            echo "- Consider triggering model retraining" >> monitoring-summary.md
+            echo "- Investigate root causes of alerts" >> monitoring-summary.md
+          else
+            echo "- System is operating within normal parameters" >> monitoring-summary.md
+            echo "- Continue regular monitoring" >> monitoring-summary.md
+          fi
+
+      - name: Upload monitoring summary
+        uses: actions/upload-artifact@v3
+        with:
+          name: monitoring-summary
+          path: monitoring-summary.md

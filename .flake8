@@ -1,0 +1,36 @@
+# Ignore patterns for code formatting tools
+.git/
+.github/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+pip-log.txt
+pip-delete-this-directory.txt
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.log
+.venv/
+.pytest_cache/
+
+# Ignore documentation and markdown files for code formatting
+*.md
+docs/
+
+# Ignore data files and artifacts
+*.pkl
+*.csv
+models/
+drift_reports/
+
+# Ignore Docker files
+Dockerfile*
+docker-compose*
+.dockerignore

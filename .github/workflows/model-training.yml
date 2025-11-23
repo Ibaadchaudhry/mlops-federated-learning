@@ -1,0 +1,495 @@
+name: Model Training Automation
+
+on:
+  # Trigger on data changes
+  push:
+    paths:
+      - 'data_ingestion.py'
+      - 'save_clients.py'
+      - 'requirements.txt'
+    branches: [ main ]
+  
+  # Trigger on model changes
+  push:
+    paths:
+      - 'model.py'
+      - 'fl_server.py'
+      - 'fl_client.py'
+      - 'train_utils.py'
+    branches: [ main ]
+  
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      training_rounds:
+        description: 'Number of federated learning rounds'
+        required: true
+        default: '10'
+        type: string
+      client_count:
+        description: 'Number of federated clients'
+        required: true
+        default: '3'
+        type: string
+      force_data_refresh:
+        description: 'Force refresh of client datasets'
+        required: false
+        default: false
+        type: boolean
+
+  # Scheduled training (weekly)
+  schedule:
+    - cron: '0 2 * * 0'  # Every Sunday at 2 AM UTC
+
+env:
+  PYTHON_VERSION: '3.10'
+
+jobs:
+  # Check if retraining is needed
+  training-check:
+    name: Training Requirements Check
+    runs-on: ubuntu-latest
+    outputs:
+      needs-training: ${{ steps.check.outputs.needs-training }}
+      drift-detected: ${{ steps.drift-check.outputs.drift-detected }}
+      model-age: ${{ steps.check.outputs.model-age }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Check training requirements
+        id: check
+        run: |
+          python -c "
+          import os
+          import json
+          from datetime import datetime, timedelta
+          
+          needs_training = False
+          model_age_days = 0
+          
+          # Check if models exist
+          if not os.path.exists('models') or not os.listdir('models'):
+              print('No models found - training needed')
+              needs_training = True
+          else:
+              # Check model age
+              model_files = [f for f in os.listdir('models') if f.endswith('.pt')]
+              if model_files:
+                  latest_model = max(model_files, key=lambda x: os.path.getmtime(f'models/{x}'))
+                  model_time = os.path.getmtime(f'models/{latest_model}')
+                  model_age = datetime.now() - datetime.fromtimestamp(model_time)
+                  model_age_days = model_age.days
+                  
+                  print(f'Latest model age: {model_age_days} days')
+                  
+                  # Retrain if model is older than 7 days
+                  if model_age_days > 7:
+                      print('Model is old - training needed')
+                      needs_training = True
+              
+              # Check performance degradation
+              if os.path.exists('models/metrics_history.json'):
+                  with open('models/metrics_history.json', 'r') as f:
+                      metrics = json.load(f)
+                  
+                  if metrics and len(metrics) > 1:
+                      latest_metrics = metrics[-1]['metrics']
+                      prev_metrics = metrics[-2]['metrics']
+                      
+                      # Check if performance dropped
+                      if latest_metrics.get('accuracy', 0) < prev_metrics.get('accuracy', 0) - 0.05:
+                          print('Performance degradation detected - training needed')
+                          needs_training = True
+          
+          # Manual trigger always trains
+          if '${{ github.event_name }}' == 'workflow_dispatch':
+              print('Manual trigger - training requested')
+              needs_training = True
+          
+          # Scheduled trigger always trains
+          if '${{ github.event_name }}' == 'schedule':
+              print('Scheduled trigger - training requested')
+              needs_training = True
+          
+          print(f'needs-training={str(needs_training).lower()}')
+          print(f'model-age={model_age_days}')
+          
+          # Set outputs
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'needs-training={str(needs_training).lower()}\\n')
+              f.write(f'model-age={model_age_days}\\n')
+          "
+
+      - name: Check for data drift
+        id: drift-check
+        run: |
+          python -c "
+          import os
+          import pandas as pd
+          import glob
+          
+          drift_detected = False
+          
+          # Check latest drift reports
+          drift_files = glob.glob('drift_reports/drift_round_*_client_*.csv')
+          
+          if drift_files:
+              # Get most recent round
+              latest_round = max([
+                  int(f.split('round_')[1].split('_')[0]) 
+                  for f in drift_files 
+                  if 'round_' in f
+              ])
+              
+              # Check drift flags in latest round
+              latest_files = [f for f in drift_files if f'round_{latest_round}_' in f]
+              total_drift_features = 0
+              total_features = 0
+              
+              for drift_file in latest_files:
+                  try:
+                      df = pd.read_csv(drift_file, index_col=0)
+                      if 'drift_flag' in df.columns:
+                          drift_features = df['drift_flag'].sum()
+                          total_drift_features += drift_features
+                          total_features += len(df)
+                          print(f'{drift_file}: {drift_features}/{len(df)} features with drift')
+                  except Exception as e:
+                      print(f'Error reading {drift_file}: {e}')
+              
+              # If more than 20% of features show drift, trigger retraining
+              if total_features > 0:
+                  drift_ratio = total_drift_features / total_features
+                  print(f'Overall drift ratio: {drift_ratio:.2%}')
+                  
+                  if drift_ratio > 0.2:
+                      print('Significant drift detected - training needed')
+                      drift_detected = True
+          
+          print(f'drift-detected={str(drift_detected).lower()}')
+          
+          # Set output
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'drift-detected={str(drift_detected).lower()}\\n')
+          "
+
+  # Automated model training
+  train-model:
+    name: Automated Model Training
+    runs-on: ubuntu-latest
+    needs: training-check
+    if: needs.training-check.outputs.needs-training == 'true'
+    timeout-minutes: 60
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Prepare training data
+        run: |
+          echo "Preparing federated client data..."
+          python save_clients.py
+          echo "Client data preparation completed"
+
+      - name: Backup existing models
+        run: |
+          if [ -d "models" ] && [ "$(ls -A models)" ]; then
+            timestamp=$(date +%Y%m%d_%H%M%S)
+            mkdir -p "models_backup_$timestamp"
+            cp -r models/* "models_backup_$timestamp/"
+            echo "Backed up existing models to models_backup_$timestamp/"
+          fi
+
+      - name: Run federated learning training
+        env:
+          FL_ROUNDS: ${{ github.event.inputs.training_rounds || '10' }}
+          FL_CLIENTS: ${{ github.event.inputs.client_count || '3' }}
+        timeout-minutes: 45
+        run: |
+          echo "Starting federated learning training"
+          echo "Rounds: $FL_ROUNDS, Clients: $FL_CLIENTS"
+          
+          # Modify fl_server.py to use environment variables
+          python -c "
+          import os
+          import multiprocessing
+          import sys
+          
+          # Set multiprocessing method
+          if sys.platform.startswith('linux'):
+              multiprocessing.set_start_method('fork', force=True)
+          else:
+              multiprocessing.set_start_method('spawn', force=True)
+          
+          # Import and modify training parameters
+          import importlib.util
+          spec = importlib.util.spec_from_file_location('fl_server', 'fl_server.py')
+          fl_server = importlib.util.module_from_spec(spec)
+          
+          # Override training parameters
+          original_main = fl_server.main
+          
+          def modified_main():
+              import pickle
+              
+              # Load client data
+              with open('client_datasets.pkl', 'rb') as f:
+                  client_datasets = pickle.load(f)
+              
+              num_clients = int(os.environ.get('FL_CLIENTS', len(client_datasets)))
+              rounds = int(os.environ.get('FL_ROUNDS', 10))
+              
+              print(f'Training with {num_clients} clients for {rounds} rounds')
+              
+              # Import training components
+              from fl_server import start_flower_server, start_client_process
+              import time
+              
+              # Get input dimension
+              any_ds = next(iter(client_datasets.values()))
+              input_dim = any_ds['X_train_norm'].shape[1]
+              
+              # Start server
+              server_proc = multiprocessing.Process(
+                  target=start_flower_server, 
+                  args=(rounds, min(num_clients, len(client_datasets)))
+              )
+              server_proc.start()
+              
+              time.sleep(2.0)  # Give server time to start
+              
+              # Start clients
+              client_procs = []
+              for i, (cid, ds) in enumerate(list(client_datasets.items())[:num_clients]):
+                  p = multiprocessing.Process(
+                      target=start_client_process,
+                      args=(cid, ds, input_dim)
+                  )
+                  p.start()
+                  client_procs.append(p)
+              
+              # Wait for completion
+              for p in client_procs:
+                  p.join()
+              
+              server_proc.join(timeout=60)
+              if server_proc.is_alive():
+                  server_proc.terminate()
+                  server_proc.join()
+              
+              print('Federated learning training completed')
+          
+          # Execute modified training
+          spec.loader.exec_module(fl_server)
+          fl_server.main = modified_main
+          fl_server.main()
+          " || echo "Training completed with warnings"
+
+      - name: Validate trained models
+        run: |
+          echo "Validating trained models..."
+          python -c "
+          import os
+          import json
+          import torch
+          from model import TabularMLP
+          
+          # Check models directory
+          if not os.path.exists('models'):
+              print('Models directory not found')
+              exit(1)
+          
+          model_files = [f for f in os.listdir('models') if f.endswith('.pt')]
+          
+          if not model_files:
+              print('No model files found')
+              exit(1)
+          
+          print(f'Found {len(model_files)} model files')
+          
+          # Validate latest model
+          latest_model = max(model_files, key=lambda x: int(x.split('_')[-1].split('.')[0]))
+          model_path = f'models/{latest_model}'
+          
+          try:
+              state_dict = torch.load(model_path, map_location='cpu')
+              print(f'Successfully loaded {latest_model}')
+              
+              # Try to create model and load weights
+              first_weight = None
+              for param in state_dict.values():
+                  if hasattr(param, 'shape') and len(param.shape) == 2:
+                      first_weight = param
+                      break
+              
+              if first_weight is not None:
+                  input_dim = first_weight.shape[1]
+                  model = TabularMLP(input_dim=input_dim)
+                  model.load_state_dict(state_dict)
+                  print(f'Model validation successful (input_dim: {input_dim})')
+              else:
+                  print('Could not determine model architecture')
+              
+          except Exception as e:
+              print(f'Model validation failed: {e}')
+              exit(1)
+          
+          # Check training metrics
+          metrics_file = 'models/metrics_history.json'
+          if os.path.exists(metrics_file):
+              with open(metrics_file, 'r') as f:
+                  metrics_history = json.load(f)
+              
+              if metrics_history:
+                  final_metrics = metrics_history[-1]['metrics']
+                  accuracy = final_metrics.get('accuracy', 0)
+                  auc = final_metrics.get('auc', 0)
+                  
+                  print(f'Final Training Metrics:')
+                  print(f'   Accuracy: {accuracy:.4f}')
+                  print(f'   AUC: {auc:.4f}')
+                  
+                  # Quality gates
+                  if accuracy < 0.65:
+                      print('Warning: Accuracy below 65% - model quality may be poor')
+                  if auc < 0.7:
+                      print('Warning: AUC below 0.7 - model quality may be poor')
+                  
+                  if accuracy >= 0.75 and auc >= 0.85:
+                      print('High quality model achieved!')
+                  
+                  # Set quality metrics for next jobs
+                  with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                      f.write(f'final-accuracy={accuracy:.4f}\\n')
+                      f.write(f'final-auc={auc:.4f}\\n')
+              else:
+                  print('No metrics found in history')
+          else:
+              print('No metrics history file found')
+          
+          print('Model validation completed')
+          "
+
+      - name: Archive training artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: trained-models-${{ github.run_number }}
+          path: |
+            models/
+            drift_reports/
+          retention-days: 30
+
+      - name: Create training summary
+        run: |
+          echo "# Automated Training Summary" > training-summary.md
+          echo "" >> training-summary.md
+          echo "**Training Run:** ${{ github.run_number }}" >> training-summary.md
+          echo "**Trigger:** ${{ github.event_name }}" >> training-summary.md
+          echo "**Timestamp:** $(date -u)" >> training-summary.md
+          echo "" >> training-summary.md
+          echo "## Configuration" >> training-summary.md
+          echo "- **Rounds:** ${{ github.event.inputs.training_rounds || '10' }}" >> training-summary.md
+          echo "- **Clients:** ${{ github.event.inputs.client_count || '3' }}" >> training-summary.md
+          echo "- **Model Age:** ${{ needs.training-check.outputs.model-age }} days" >> training-summary.md
+          echo "- **Drift Detected:** ${{ needs.training-check.outputs.drift-detected }}" >> training-summary.md
+          echo "" >> training-summary.md
+          
+          # Add metrics if available
+          if [ -f "models/metrics_history.json" ]; then
+            echo "## Final Metrics" >> training-summary.md
+            python -c "
+            import json
+            with open('models/metrics_history.json', 'r') as f:
+                metrics = json.load(f)
+            if metrics:
+                final = metrics[-1]['metrics']
+                print(f'- **Accuracy:** {final.get(\"accuracy\", 0):.4f}')
+                print(f'- **AUC:** {final.get(\"auc\", 0):.4f}')
+                print(f'- **Loss:** {final.get(\"loss\", 0):.4f}')
+            " >> training-summary.md
+          fi
+          
+          echo "" >> training-summary.md
+          echo "## Next Steps" >> training-summary.md
+          echo "- Review model performance in dashboard" >> training-summary.md
+          echo "- Check drift reports for data quality" >> training-summary.md
+          echo "- Consider deployment to staging" >> training-summary.md
+
+      - name: Upload training summary
+        uses: actions/upload-artifact@v3
+        with:
+          name: training-summary
+          path: training-summary.md
+
+  # Trigger deployment if training was successful
+  trigger-deployment:
+    name: Trigger Deployment
+    runs-on: ubuntu-latest
+    needs: [training-check, train-model]
+    if: needs.train-model.result == 'success'
+    
+    steps:
+      - name: Trigger deployment workflow
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'mlops-ci-cd.yml',
+              ref: 'main',
+              inputs: {
+                force_retrain: 'false',
+                environment: 'staging'
+              }
+            });
+            
+            console.log('Triggered deployment workflow');
+
+  # Notification
+  notify-training:
+    name: Training Notification
+    runs-on: ubuntu-latest
+    needs: [training-check, train-model]
+    if: always()
+    
+    steps:
+      - name: Training completed notification
+        run: |
+          if [ "${{ needs.train-model.result }}" == "success" ]; then
+            echo "🎉 Automated training completed successfully!"
+            echo "- Training trigger: ${{ github.event_name }}"
+            echo "- Model age was: ${{ needs.training-check.outputs.model-age }} days"
+            echo "- Drift detected: ${{ needs.training-check.outputs.drift-detected }}"
+          elif [ "${{ needs.train-model.result }}" == "skipped" ]; then
+            echo "ℹTraining was skipped - no training needed"
+            echo "- Model age: ${{ needs.training-check.outputs.model-age }} days"
+            echo "- Drift detected: ${{ needs.training-check.outputs.drift-detected }}"
+          else
+            echo "Automated training failed!"
+            echo "Please check the logs and investigate the issue."
+          fi

@@ -1,0 +1,111 @@
+version: '3.8'
+
+services:
+  # Federated Learning Server
+  fl-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: fl-server
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./models:/app/models
+      - ./drift_reports:/app/drift_reports
+      - ./client_datasets.pkl:/app/client_datasets.pkl:ro
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    command: python fl_server.py
+    networks:
+      - fl-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('localhost', 8080)); s.close()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Model API Service
+  model-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    container_name: model-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./models:/app/models:ro
+      - ./client_datasets.pkl:/app/client_datasets.pkl:ro
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      fl-server:
+        condition: service_healthy
+    networks:
+      - fl-network
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Dashboard Service
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile.dashboard
+    container_name: fl-dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./models:/app/models:ro
+      - ./drift_reports:/app/drift_reports:ro
+      - ./client_datasets.pkl:/app/client_datasets.pkl:ro
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    depends_on:
+      fl-server:
+        condition: service_healthy
+      model-api:
+        condition: service_healthy
+    networks:
+      - fl-network
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # Data Preparation Service (Run once to prepare client datasets)
+  data-prep:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: data-prep
+    volumes:
+      - ./:/app
+    environment:
+      - PYTHONPATH=/app
+      - PYTHONUNBUFFERED=1
+    command: python save_clients.py
+    networks:
+      - fl-network
+    profiles:
+      - data-prep
+    restart: "no"
+
+networks:
+  fl-network:
+    driver: bridge
+    name: federated-learning-network
+
+volumes:
+  models-data:
+    name: fl-models
+  drift-data:
+    name: fl-drift-reports
