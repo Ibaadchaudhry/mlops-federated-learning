@@ -1,36 +1,38 @@
-# Ignore patterns for code formatting tools
-.git/
-.github/
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-env/
-pip-log.txt
-pip-delete-this-directory.txt
-.tox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.log
-.venv/
-.pytest_cache/
-
-# Ignore documentation and markdown files for code formatting
-*.md
-docs/
-
-# Ignore data files and artifacts
-*.pkl
-*.csv
-models/
-drift_reports/
-
-# Ignore Docker files
-Dockerfile*
-docker-compose*
-.dockerignore
+[flake8]
+max-line-length = 120
+ignore = 
+    E203,  # whitespace before ':'
+    E501,  # line too long
+    W503,  # line break before binary operator
+    F401,  # imported but unused
+    F841   # local variable assigned but never used
+exclude = 
+    .git,
+    .github,
+    __pycache__,
+    *.pyc,
+    *.pyo,
+    *.pyd,
+    .Python,
+    env,
+    pip-log.txt,
+    pip-delete-this-directory.txt,
+    .tox,
+    .coverage,
+    .coverage.*,
+    .cache,
+    nosetests.xml,
+    coverage.xml,
+    *.cover,
+    *.log,
+    .venv,
+    .pytest_cache,
+    *.md,
+    docs,
+    *.pkl,
+    *.csv,
+    models,
+    drift_reports,
+    Dockerfile*,
+    docker-compose*,
+    .dockerignore
