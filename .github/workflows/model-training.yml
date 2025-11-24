@@ -206,6 +206,22 @@ jobs:
           echo "Preparing federated client data..."
           python save_clients.py
           echo "Client data preparation completed"
+          
+          # Verify client datasets were created
+          if [ -f "client_datasets.pkl" ]; then
+            echo "✅ Client datasets file created successfully"
+            python -c "
+import pickle
+with open('client_datasets.pkl', 'rb') as f:
+    datasets = pickle.load(f)
+print(f'Number of clients prepared: {len(datasets)}')
+for cid, ds in datasets.items():
+    print(f'Client {cid}: {ds[\"X_train_norm\"].shape[0]} training samples')
+            "
+          else
+            echo "❌ Error: client_datasets.pkl not found"
+            exit 1
+          fi
 
       - name: Backup existing models
         run: |
@@ -228,15 +244,24 @@ jobs:
           # Ensure models directory exists
           mkdir -p models
           
-          # Run the federated learning training directly
+          # Verify client datasets exist before training
+          if [ ! -f "client_datasets.pkl" ]; then
+            echo "❌ Error: client_datasets.pkl not found. Cannot start training."
+            exit 1
+          fi
+          
+          echo "✅ Client datasets found, starting FL server..."
+          
+          # Run the federated learning training
           python fl_server.py || echo "Training completed with warnings"
           
           # Check if models were created
           if [ -d "models" ] && [ "$(ls -A models 2>/dev/null)" ]; then
-            echo "Models created successfully"
+            echo "✅ Models created successfully"
             ls -la models/
           else
-            echo "Warning: No models found after training"
+            echo "⚠️ Warning: No models found after training"
+            echo "This might indicate a training failure"
           fi
 
       - name: Validate trained models
@@ -359,14 +384,14 @@ jobs:
           if [ -f "models/metrics_history.json" ]; then
             echo "## Final Metrics" >> training-summary.md
             python -c "
-            import json
-            with open('models/metrics_history.json', 'r') as f:
-                metrics = json.load(f)
-            if metrics:
-                final = metrics[-1]['metrics']
-                print(f'- **Accuracy:** {final.get(\"accuracy\", 0):.4f}')
-                print(f'- **AUC:** {final.get(\"auc\", 0):.4f}')
-                print(f'- **Loss:** {final.get(\"loss\", 0):.4f}')
+import json
+with open('models/metrics_history.json', 'r') as f:
+    metrics = json.load(f)
+if metrics:
+    final = metrics[-1]['metrics']
+    print(f'- **Accuracy:** {final.get(\"accuracy\", 0):.4f}')
+    print(f'- **AUC:** {final.get(\"auc\", 0):.4f}')
+    print(f'- **Loss:** {final.get(\"loss\", 0):.4f}')
             " >> training-summary.md
           fi
           
