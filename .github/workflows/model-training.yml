@@ -359,15 +359,15 @@ jobs:
           if [ -f "models/metrics_history.json" ]; then
             echo "## Final Metrics" >> training-summary.md
             python -c "
-            import json
-            with open('models/metrics_history.json', 'r') as f:
-                metrics = json.load(f)
-            if metrics:
-                final = metrics[-1]['metrics']
-                print(f'- **Accuracy:** {final.get(\"accuracy\", 0):.4f}')
-                print(f'- **AUC:** {final.get(\"auc\", 0):.4f}')
-                print(f'- **Loss:** {final.get(\"loss\", 0):.4f}')
-            " >> training-summary.md
+          import json
+          with open('models/metrics_history.json', 'r') as f:
+              metrics = json.load(f)
+          if metrics:
+              final = metrics[-1]['metrics']
+              print(f'- **Accuracy:** {final.get(\"accuracy\", 0):.4f}')
+              print(f'- **AUC:** {final.get(\"auc\", 0):.4f}')
+              print(f'- **Loss:** {final.get(\"loss\", 0):.4f}')
+          " >> training-summary.md
           fi
           
           echo "" >> training-summary.md
