@@ -382,31 +382,6 @@ jobs:
           name: training-summary
           path: training-summary.md
 
-  # Trigger deployment if training was successful
-  trigger-deployment:
-    name: Trigger Deployment
-    runs-on: ubuntu-latest
-    needs: [training-check, train-model]
-    if: needs.train-model.result == 'success'
-    
-    steps:
-      - name: Trigger deployment workflow
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.actions.createWorkflowDispatch({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              workflow_id: 'mlops-ci-cd.yml',
-              ref: 'main',
-              inputs: {
-                force_retrain: 'false',
-                environment: 'staging'
-              }
-            });
-            
-            console.log('Triggered deployment workflow');
-
   # Notification
   notify-training:
     name: Training Notification
