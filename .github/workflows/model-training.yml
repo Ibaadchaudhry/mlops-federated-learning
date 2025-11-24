@@ -1,7 +1,6 @@
 name: Model Training Automation
 
 on:
-  # Trigger on data or model changes
   push:
     paths:
       - 'data_ingestion.py'
@@ -12,8 +11,6 @@ on:
       - 'fl_client.py'
       - 'train_utils.py'
     branches: [ main ]
-  
-  # Manual trigger
   workflow_dispatch:
     inputs:
       training_rounds:
